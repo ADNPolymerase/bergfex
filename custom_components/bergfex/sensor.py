@@ -65,9 +65,9 @@ async def async_setup_entry(
             update_interval=SCAN_INTERVAL,
         )
         hass.data[DOMAIN][COORDINATORS][country_name] = coordinator
+        await coordinator.async_config_entry_first_refresh() # Call only when newly created
 
     coordinator = hass.data[DOMAIN][COORDINATORS][country_name]
-    await coordinator.async_config_entry_first_refresh()
 
     sensors = [
         BergfexSensor(coordinator, entry, "Status", "status", icon="mdi:ski"),
@@ -227,6 +227,8 @@ class BergfexSensor(SensorEntity):
     def native_value(self) -> str | int | None:
         """Return the state of the sensor."""
         # Data for this specific ski area
+        if self.coordinator.data is None:
+            return None
         all_areas_data = cast(dict, self.coordinator.data)
         area_data = all_areas_data.get(self._area_path)
 
