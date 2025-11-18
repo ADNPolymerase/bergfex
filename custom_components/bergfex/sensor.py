@@ -34,40 +34,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Bergfex sensor entry."""
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN].setdefault(COORDINATORS, {})
-
-    # Handle old config entries that don't have the 'country' key by defaulting to Austria
-    country_name = entry.data.get(CONF_COUNTRY, "Österreich")
-    country_path = COUNTRIES[country_name]
-    area_name = entry.data["name"]
-
-    if country_name not in hass.data[DOMAIN][COORDINATORS]:
-        _LOGGER.debug("Creating new coordinator for country: %s", country_name)
-        session = async_get_clientsession(hass)
-
-        async def async_update_data():
-            """Fetch and parse data for all ski areas in a country."""
-            try:
-                url = f"{BASE_URL}{country_path}"
-                async with session.get(url, allow_redirects=True) as response:
-                    response.raise_for_status()
-                    html = await response.text()
-                return parse_overview_data(html)
-            except Exception as err:
-                raise UpdateFailed(f"Error communicating with Bergfex: {err}")
-
-        coordinator = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            name=f"bergfex_{country_name}",
-            update_method=async_update_data,
-            update_interval=SCAN_INTERVAL,
-        )
-        hass.data[DOMAIN][COORDINATORS][country_name] = coordinator
-        await coordinator.async_config_entry_first_refresh() # Call only when newly created
-
-    coordinator = hass.data[DOMAIN][COORDINATORS][country_name]
+    coordinator = entry.runtime_data
+    _LOGGER.debug(
+        "Sensor async_setup_entry - Coordinator: %s, Entry runtime data: %s",
+        coordinator,
+        entry.runtime_data,
+    )
 
     sensors = [
         BergfexSensor(coordinator, entry, "Status", "status", icon="mdi:ski"),
@@ -117,84 +89,11 @@ async def async_setup_entry(
             coordinator, entry, "Last Update", "last_update", icon="mdi:clock-outline"
         ),
     ]
+
     async_add_entities(sensors)
 
 
-def parse_overview_data(html: str) -> dict[str, dict[str, Any]]:
-    """Parse the HTML of the overview page and return a dict of all ski areas."""
-    soup = BeautifulSoup(html, "html.parser")
-    results = {}
-
-    table = soup.find("table", class_="snow")
-    if not table:
-        _LOGGER.warning("Could not find overview data table with class 'snow'")
-        return {}
-
-    for row in table.find_all("tr")[1:]:  # Skip header row
-        cols = row.find_all("td")
-        if len(cols) < 6:
-            continue
-
-        link = cols[0].find("a")
-        if not (link and link.get("href")):
-            continue
-
-        area_path = link["href"]
-        area_data = {}
-
-        # Snow Depths (Valley, Mountain) and New Snow from data-value
-        area_data["snow_valley"] = cols[1].get("data-value")
-        area_data["snow_mountain"] = cols[2].get("data-value")
-        area_data["new_snow"] = cols[3].get("data-value")
-
-        # Lifts and Status (from column 4)
-        lifts_cell = cols[4]
-        status_div = lifts_cell.find("div", class_="icon-status")
-        if status_div:
-            classes = status_div.get("class", [])
-            if "icon-status1" in classes:
-                area_data["status"] = "Open"
-            elif "icon-status0" in classes:
-                area_data["status"] = "Closed"
-            else:
-                area_data["status"] = "Unknown"
-
-        lifts_raw = lifts_cell.text.strip()
-        lifts_open = None
-        lifts_total = None
-
-        if "/" in lifts_raw:
-            parts = lifts_raw.split("/")
-            if len(parts) == 2:
-                try:
-                    lifts_open = int(parts[0].strip())
-                except ValueError:
-                    _LOGGER.debug("Could not parse lifts_open_count: %s", parts[0].strip())
-                try:
-                    lifts_total = int(parts[1].strip())
-                except ValueError:
-                    _LOGGER.debug("Could not parse lifts_total_count: %s", parts[1].strip())
-        elif lifts_raw.isdigit():
-            try:
-                lifts_open = int(lifts_raw)
-            except ValueError:
-                _LOGGER.debug("Could not parse lifts_open_count: %s", lifts_raw)
-
-        if lifts_open is not None:
-            area_data["lifts_open_count"] = lifts_open
-        if lifts_total is not None:
-            area_data["lifts_total_count"] = lifts_total
-
-        # Last Update - Get timestamp from data-value on the <td> if available
-        if "data-value" in cols[5].attrs:
-            area_data["last_update"] = cols[5]["data-value"]
-        else:
-            area_data["last_update"] = cols[5].text.strip()  # Fallback to text
-
-        # Clean up "-" values
-        results[area_path] = {k: v for k, v in area_data.items() if v not in ("-", "")}
-
-    return results
+from .parser import parse_overview_data, parse_resort_page
 
 
 class BergfexSensor(SensorEntity):
@@ -212,7 +111,8 @@ class BergfexSensor(SensorEntity):
     ):
         """Initialize the sensor."""
         self.coordinator = coordinator
-        self._area_name = entry.data["name"]
+        self._initial_area_name = entry.data["name"]  # Store initial name as fallback
+        self._area_name = self._initial_area_name  # Current name, can be updated
         self._area_path = entry.data[CONF_SKI_AREA]
         self._config_url = f"{BASE_URL}{self._area_path}"
         self._sensor_name = sensor_name
@@ -220,8 +120,40 @@ class BergfexSensor(SensorEntity):
         self._attr_icon = icon
         self._attr_native_unit_of_measurement = unit
         self._attr_state_class = state_class
+        # Initialize Unique ID and name here
+        self._attr_unique_id = f"bergfex_{self._initial_area_name.lower().replace(' ', '_')}_{self._sensor_name.lower().replace(' ', '_')}"
+        self._attr_name = f"{self._initial_area_name} {self._sensor_name}"
+        _LOGGER.debug(
+            "BergfexSensor __init__ - Area Path: %s, Initial Area Name: %s, Unique ID: %s, Name: %s",
+            self._area_path,
+            self._initial_area_name,
+            self._attr_unique_id,
+            self._attr_name,
+        )
+
+    def _update_names(self) -> None:
+        """Update the area name, unique ID, and entity name based on coordinator data."""
+        if self.coordinator.data and self._area_path in self.coordinator.data:
+            area_data = self.coordinator.data[self._area_path]
+            if "resort_name" in area_data:
+                self._area_name = area_data["resort_name"]
+            else:
+                self._area_name = self._initial_area_name
+        else:
+            self._area_name = self._initial_area_name
+
+        # Always update unique_id and name after _area_name might have changed
         self._attr_unique_id = f"bergfex_{self._area_name.lower().replace(' ', '_')}_{self._sensor_name.lower().replace(' ', '_')}"
-        self._attr_name = f"{self._area_name} {sensor_name}"
+        self._attr_name = f"{self._area_name} {self._sensor_name}"
+
+        _LOGGER.debug(
+            "BergfexSensor _update_names - Coordinator Data: %s, Area Path: %s, Resulting Area Name: %s, Unique ID: %s, Name: %s",
+            self.coordinator.data,
+            self._area_path,
+            self._area_name,
+            self._attr_unique_id,
+            self._attr_name,
+        )
 
     @property
     def native_value(self) -> str | int | None:
@@ -234,11 +166,24 @@ class BergfexSensor(SensorEntity):
 
         if area_data and self._data_key in area_data:
             value = area_data[self._data_key]
+            _LOGGER.debug(
+                "BergfexSensor native_value - Coordinator Data: %s, Area Data: %s, Data Key: %s, Value: %s",
+                self.coordinator.data,
+                area_data,
+                self._data_key,
+                value,
+            )
             # Try to convert to integer if it's a number
             if isinstance(value, str) and value.isdigit():
                 return int(value)
             return value
 
+        _LOGGER.debug(
+            "BergfexSensor native_value - Coordinator Data: %s, Area Data: %s, Data Key: %s, Returning None",
+            self.coordinator.data,
+            area_data,
+            self._data_key,
+        )
         return None
 
     @property
@@ -266,6 +211,14 @@ class BergfexSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
+        self._update_names()  # Set initial names based on available data
         self.async_on_remove(
-            self.coordinator.async_add_listener(self.async_write_ha_state)
+            self.coordinator.async_add_listener(
+                lambda: self.hass.async_add_job(self._handle_coordinator_update)
+            )
         )
+
+    async def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_names()
+        self.async_write_ha_state()

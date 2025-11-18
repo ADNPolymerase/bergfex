@@ -9,7 +9,10 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/timmaurice/bergfex/issues",
   "requirements": [
-    "beautifulsoup4>=4.12.2"
+    "beautifulsoup4>=4.12.2",
+    "lxml>=5.1.0"
   ],
-  "version": "1.0.1"
+  "translations": true,
+  "supported_languages": ["en", "de"],
+  "version": "1.0.3"
 }

@@ -63,49 +63,62 @@ class BergfexConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {vol.Required(CONF_COUNTRY): vol.In(list(COUNTRIES.keys()))}
         )
 
-        return self.async_show_form(step_id="user", data_schema=country_schema)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=country_schema,
+        )
 
     async def async_step_ski_area(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the ski area selection step."""
-        if user_input is not None:
-            ski_area_path = user_input[CONF_SKI_AREA]
-            country_name = self._data[CONF_COUNTRY]
-            country_path = COUNTRIES[country_name]
-            all_areas = await get_ski_areas(self.hass, country_path)
-            ski_area_name = all_areas.get(
-                ski_area_path, ski_area_path.strip("/").split("/")[-1]
-            )
-
-            # Use the URL path as the unique ID to prevent duplicates
-            await self.async_set_unique_id(ski_area_path)
-            self._abort_if_unique_id_configured()
-
-            return self.async_create_entry(
-                title=ski_area_name,
-                data={
-                    CONF_SKI_AREA: ski_area_path,
-                    CONF_COUNTRY: country_name,
-                    "name": ski_area_name,
-                    "url": f"{BASE_URL}{ski_area_path}",
-                },
-            )
-
         errors = {}
         country_name = self._data[CONF_COUNTRY]
         country_path = COUNTRIES[country_name]
         ski_areas = await get_ski_areas(self.hass, country_path)
 
+        if user_input is not None:
+            ski_area_path = user_input.get(CONF_SKI_AREA)
+            manual_path = user_input.get("manual_path")
+
+            if not ski_area_path and not manual_path:
+                errors["base"] = "config.error.no_selection"
+            else:
+                if manual_path:
+                    ski_area_path = manual_path
+                    if not ski_area_path.startswith("/"):
+                        ski_area_path = f"/{ski_area_path}"
+                    if not ski_area_path.endswith("/schneebericht/"):
+                        ski_area_path = f"{ski_area_path.strip('/')}/schneebericht/"
+
+                # Keep ski_area_path as the unique ID
+                ski_area_name = ski_areas.get(
+                    ski_area_path, ski_area_path.strip("/").split("/")[-2]
+                )
+
+                return self.async_create_entry(
+                    title=ski_area_name,
+                    data={
+                        CONF_SKI_AREA: ski_area_path,  # URL path as key
+                        CONF_COUNTRY: country_name,
+                        "name": ski_area_name,  # Human-readable
+                        "url": f"{BASE_URL}{ski_area_path}",
+                    },
+                )
+
         if not ski_areas:
-            errors["base"] = "no_areas_found"
+            errors["base"] = "config.error.no_areas_found"
             return self.async_show_form(
                 step_id="ski_area",
                 errors=errors,
-                description_placeholders={"country": country_name},
             )
 
-        data_schema = vol.Schema({vol.Required(CONF_SKI_AREA): vol.In(ski_areas)})
+        data_schema = vol.Schema(
+            {
+                vol.Optional(CONF_SKI_AREA): vol.In(ski_areas),
+                vol.Optional("manual_path"): str,
+            }
+        )
 
         return self.async_show_form(
             step_id="ski_area",

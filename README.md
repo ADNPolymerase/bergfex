@@ -42,6 +42,7 @@ Configuration is done entirely through the Home Assistant UI.
 2.  Click **Add Integration** and search for "Bergfex Snow Report".
 3.  **Step 1: Select Country**: A dialog will appear asking you to select the country where your desired ski area is located.
 4.  **Step 2: Select Ski Area**: A second dialog will show a list of all ski areas in the selected country. Choose the one you want to monitor.
+    *   **Manual Entry**: If your desired ski area is not in the dropdown list, you can manually enter its URL path (e.g., `nebelhorn-oberstdorf` or `lelex-crozet`) in the "Manual URL Path" field.
 5.  Click **Submit**.
 
 A new device will be created for the ski area, containing all the sensors listed below. You can repeat this process to add multiple ski areas.
