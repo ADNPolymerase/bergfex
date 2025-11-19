@@ -216,7 +216,7 @@ class BergfexSensor(SensorEntity):
         self._update_names()  # Set initial names based on available data
         self.async_on_remove(
             self.coordinator.async_add_listener(
-                lambda: self.hass.async_add_job(self._handle_coordinator_update)
+                lambda: self.hass.async_create_task(self._handle_coordinator_update())
             )
         )
 
