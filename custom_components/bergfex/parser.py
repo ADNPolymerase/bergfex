@@ -3,11 +3,93 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from bs4 import BeautifulSoup
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def parse_german_datetime(date_str: str) -> datetime | None:
+    """Parse German date/time strings to datetime objects.
+
+    Handles formats like:
+    - "Heute, 11:14" (Today, 11:14)
+    - "Gestern, 11:14" (Yesterday, 11:14)
+    - "Fr, 28.11., 09:33" (Fri, 28.11., 09:33)
+    """
+    if not date_str:
+        return None
+
+    date_str = date_str.strip()
+    # Use Europe/Vienna as default timezone for Bergfex
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+
+    tz = ZoneInfo("Europe/Vienna")
+    now = datetime.now(tz)
+
+    # Handle "Heute" (today)
+    if date_str.lower().startswith("heute"):
+        time_match = re.search(r"(\d{1,2}):(\d{2})", date_str)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # Handle "Gestern" (yesterday)
+    elif date_str.lower().startswith("gestern"):
+        time_match = re.search(r"(\d{1,2}):(\d{2})", date_str)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            yesterday = now - timedelta(days=1)
+            return yesterday.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # Handle specific date format like "Fr, 28.11., 09:33" or "05.11.2025, 14:40"
+    else:
+        # Match pattern: optional day name, day.month.[year][.,] time
+        # Tries to match dd.mm.yyyy, HH:MM or dd.mm., HH:MM
+        date_match = re.search(
+            r"(\d{1,2})\.(\d{1,2})\.(?:\s*(\d{4})|\s*(\d{2}))?(?:,|\.)?\s*(\d{1,2}):(\d{2})",
+            date_str,
+        )
+        if date_match:
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+
+            # Check if year is present (group 3 for 4-digit, group 4 for 2-digit)
+            year_str = date_match.group(3) or date_match.group(4)
+
+            if year_str:
+                year = int(year_str)
+                if len(year_str) == 2:
+                    year += 2000
+            else:
+                # Determine the year - if the date is in the future, use current year, otherwise use current year
+                year = now.year
+
+            hour = int(date_match.group(5))
+            minute = int(date_match.group(6))
+
+            try:
+                result = datetime(year, month, day, hour, minute, 0, 0, tzinfo=tz)
+                # If no year was parsed and the date is more than 6 months in the future, it's probably from last year
+                if not year_str and result > now + timedelta(days=180):
+                    result = datetime(
+                        year - 1, month, day, hour, minute, 0, 0, tzinfo=tz
+                    )
+                return result
+            except ValueError:
+                _LOGGER.debug("Could not parse date: %s", date_str)
+                return None
+
+    _LOGGER.debug("Could not parse date string: %s", date_str)
+    return None
 
 
 def parse_overview_data(html: str) -> dict[str, dict[str, Any]]:
@@ -80,10 +162,17 @@ def parse_overview_data(html: str) -> dict[str, dict[str, Any]]:
             area_data["lifts_total_count"] = lifts_total
 
         # Last Update - Get timestamp from data-value on the <td> if available
+        last_update_text = None
         if "data-value" in cols[5].attrs:
-            area_data["last_update"] = cols[5]["data-value"]
+            last_update_text = cols[5]["data-value"]
         else:
-            area_data["last_update"] = cols[5].text.strip()  # Fallback to text
+            last_update_text = cols[5].text.strip()  # Fallback to text
+
+        # Convert to datetime
+        if last_update_text:
+            last_update_dt = parse_german_datetime(last_update_text)
+            if last_update_dt:
+                area_data["last_update"] = last_update_dt
 
         # Clean up "-" values
         results[area_path] = {k: v for k, v in area_data.items() if v not in ("-", "")}
@@ -99,7 +188,7 @@ def get_text_from_dd(soup: BeautifulSoup, text: str) -> str | None:
     return None
 
 
-def parse_resort_page(html: str) -> dict[str, Any]:
+def parse_resort_page(html: str, area_path: str | None = None) -> dict[str, Any]:
     """Parse the HTML of a single resort page."""
     soup = BeautifulSoup(html, "lxml")
     area_data = {}
@@ -110,6 +199,46 @@ def parse_resort_page(html: str) -> dict[str, Any]:
         spans = h1_tag.find_all("span")
         if len(spans) > 1:
             area_data["resort_name"] = spans[1].text.strip()
+
+    # Region path from breadcrumbs
+    # Try finding by aria-label "Breadcrumb" (newer design)
+    breadcrumb_ul = soup.find("ul", attrs={"aria-label": "Breadcrumb"})
+    links = []
+    if breadcrumb_ul:
+        links = breadcrumb_ul.find_all("a")
+    else:
+        # Fallback to old class if aria-label not found
+        breadcrumb_wrapper = soup.find("div", class_="breadcrumb-wrapper")
+        if breadcrumb_wrapper:
+            links = breadcrumb_wrapper.find_all("a")
+
+    if len(links) >= 3:  # Home, Country, Region, (Resort)
+        # Default: Region is second to last link
+        region_link = links[-2]
+
+        # If area_path is provided, check if links[-2] is actually the resort link
+        # This happens on subpages like /resort/schneebericht/
+        if area_path:
+            link_href = region_link.get("href", "")
+            # If the link href is a prefix of area_path (e.g. /hintertux/ in /hintertux/schneebericht/)
+            # then links[-2] is the resort, so region must be links[-3]
+            if link_href and link_href != "/" and link_href in area_path:
+                if len(links) >= 4:
+                    region_link = links[-3]
+                    _LOGGER.debug(
+                        "Adjusted region link to %s because %s is in area_path %s",
+                        region_link.get("href"),
+                        link_href,
+                        area_path,
+                    )
+
+        region_path = region_link.get("href")
+        if region_path and region_path.startswith("/") and region_path != "/":
+            # Get the part between the first and second slash if it exists, or just after first slash
+            parts = region_path.strip("/").split("/")
+            if len(parts) > 0:
+                area_data["region_path"] = f"/{parts[0]}/"
+                _LOGGER.debug("Found region path: %s", area_data["region_path"])
 
     # Snow depths and elevations
     all_big_dts = soup.find_all("dt", class_="big")
@@ -151,7 +280,10 @@ def parse_resort_page(html: str) -> dict[str, Any]:
     # Last update
     h2_sub = soup.find("div", class_="h2-sub")
     if h2_sub:
-        area_data["last_update"] = h2_sub.text.strip()
+        last_update_text = h2_sub.text.strip()
+        last_update_dt = parse_german_datetime(last_update_text)
+        if last_update_dt:
+            area_data["last_update"] = last_update_dt
 
     # Snow condition (Schneezustand)
     snow_condition = get_text_from_dd(soup, "Schneezustand")
@@ -235,3 +367,36 @@ def parse_resort_page(html: str) -> dict[str, Any]:
         area_data["status"] = "Closed"
 
     return {k: v for k, v in area_data.items() if v not in ("-", "")}
+
+
+def parse_snow_forecast_images(html: str, page_num: int) -> dict[str, str]:
+    """
+    Parse snow forecast page to extract image URLs.
+
+    Args:
+        html: HTML content of the page
+        page_num: Page number (0-5)
+
+    Returns:
+        dict with 'daily_forecast_url', 'daily_caption' and optionally 'summary_url', 'summary_caption'
+    """
+    soup = BeautifulSoup(html, "lxml")
+    forecast_imgs = soup.find_all(class_="snowforecast-img")
+
+    result = {}
+
+    # First image is always the daily forecast (24h)
+    if forecast_imgs:
+        first_a = forecast_imgs[0].find("a")
+        if first_a and first_a.get("href"):
+            result["daily_forecast_url"] = first_a["href"]
+            result["daily_caption"] = first_a.get("data-caption", "")
+
+    # Last image is summary (for pages 1-5)
+    if page_num > 0 and len(forecast_imgs) > 1:
+        last_a = forecast_imgs[-1].find("a")
+        if last_a and last_a.get("href"):
+            result["summary_url"] = last_a["href"]
+            result["summary_caption"] = last_a.get("data-caption", "")
+
+    return result

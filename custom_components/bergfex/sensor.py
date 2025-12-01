@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urljoin
 
@@ -148,7 +148,12 @@ async def async_setup_entry(
             icon="mdi:snowflake-variant",
         ),
         BergfexSensor(
-            coordinator, entry, "Last Update", "last_update", icon="mdi:clock-outline"
+            coordinator,
+            entry,
+            "Last Update",
+            "last_update",
+            icon="mdi:clock-outline",
+            device_class=SensorDeviceClass.TIMESTAMP,
         ),
     ]
 
@@ -170,6 +175,7 @@ class BergfexSensor(SensorEntity):
         icon: str | None = None,
         unit: str | None = None,
         state_class: SensorStateClass | None = None,
+        device_class: SensorDeviceClass | None = None,
     ):
         """Initialize the sensor."""
         self.coordinator = coordinator
@@ -182,6 +188,7 @@ class BergfexSensor(SensorEntity):
         self._attr_icon = icon
         self._attr_native_unit_of_measurement = unit
         self._attr_state_class = state_class
+        self._attr_device_class = device_class
         # Initialize Unique ID and name here
         self._attr_unique_id = f"bergfex_{self._initial_area_name.lower().replace(' ', '_')}_{self._sensor_name.lower().replace(' ', '_')}"
         self._attr_name = f"{self._initial_area_name} {self._sensor_name}"
@@ -218,7 +225,7 @@ class BergfexSensor(SensorEntity):
         )
 
     @property
-    def native_value(self) -> str | int | None:
+    def native_value(self) -> str | int | datetime | None:
         """Return the state of the sensor."""
         # Data for this specific ski area
         if self.coordinator.data is None:
@@ -235,6 +242,9 @@ class BergfexSensor(SensorEntity):
                 self._data_key,
                 value,
             )
+            # Return datetime objects as-is for timestamp sensors
+            if isinstance(value, datetime):
+                return value
             # Try to convert to integer if it's a number
             if isinstance(value, str) and value.isdigit():
                 return int(value)
@@ -263,6 +273,12 @@ class BergfexSensor(SensorEntity):
 
             if self._data_key == "snow_valley" and "elevation_valley" in area_data:
                 return {"elevation": area_data["elevation_valley"]}
+
+            # Add caption for image sensors
+            if self._data_key.endswith("_url"):
+                caption_key = self._data_key.replace("_url", "_caption")
+                if caption_key in area_data:
+                    return {"caption": area_data[caption_key]}
 
         return None
 

@@ -53,13 +53,30 @@ For each configured ski area, the following sensors will be created:
 
 | Sensor            | Description                                   | Example Value         |
 | ----------------- | --------------------------------------------- | --------------------- |
-| **Status**        | The current operational status of the resort. | `Open`                |
-| **Snow Valley**   | Snow depth in the valley, in cm.              | `35`                  |
-| **Snow Mountain** | Snow depth on the mountain, in cm.            | `110`                 |
-| **New Snow**      | Fresh snow in the last 24h, in cm.            | `15`                  |
-| **Lifts Open**    | The number of currently open lifts.           | `14`                  |
-| **Lifts Total**   | The total number of lifts in the resort.      | `26`                  |
-| **Last Update**   | The timestamp of the last data report.        | `2024-10-28 21:54:24` |
+| **Status**            | The current operational status of the resort. | `Open`                |
+| **Snow Valley**       | Snow depth in the valley, in cm.              | `35`                  |
+| **Snow Mountain**     | Snow depth on the mountain, in cm.            | `110`                 |
+| **New Snow**          | Fresh snow in the last 24h, in cm.            | `15`                  |
+| **Snow Condition**    | Condition of the snow.                        | `Pulver`              |
+| **Last Snowfall**     | Date of the last snowfall.                    | `28.11.`              |
+| **Avalanche Warning** | Current avalanche warning level.              | `2 - mäßig`           |
+| **Lifts Open**        | The number of currently open lifts.           | `14`                  |
+| **Lifts Total**       | The total number of lifts in the resort.      | `26`                  |
+| **Slopes Open (km)**  | Kilometers of open slopes.                    | `45`                  |
+| **Slopes Total (km)** | Total kilometers of slopes.                   | `60`                  |
+| **Slopes Open**       | Number of open slopes.                        | `20`                  |
+| **Slopes Total**      | Total number of slopes.                       | `30`                  |
+| **Slope Condition**   | Condition of the slopes.                      | `gut`                 |
+| **Last Update**       | The timestamp of the last data report.        | `2024-10-28 21:54:24` |
+
+## Image Entities
+
+In addition to sensors, the integration provides image entities for snow forecasts. These can be displayed in dashboards using the Picture Entity card or similar.
+
+| Entity                        | Description                                      |
+| ----------------------------- | ------------------------------------------------ |
+| **Snow Forecast Day 0-5**     | Daily snow forecast maps for the next 6 days.    |
+| **Snow Forecast Summary Xh**  | Summary forecast maps (48h, 72h, 96h, 120h, 144h). |
 
 ## Contributions
 

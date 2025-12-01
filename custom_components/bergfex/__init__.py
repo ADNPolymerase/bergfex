@@ -21,9 +21,9 @@ from .const import (
     COUNTRIES,
     DOMAIN,
 )
-from .parser import parse_overview_data, parse_resort_page
+from .parser import parse_overview_data, parse_resort_page, parse_snow_forecast_images
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = ["sensor", "image"]
 SCAN_INTERVAL = timedelta(minutes=30)
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,7 +56,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async with session.get(url, allow_redirects=True) as response:
                     response.raise_for_status()
                     html = await response.text()
-                parsed_data = parse_resort_page(html)
+                parsed_data = parse_resort_page(html, area_path)
+
+                # Fetch snow forecast images (pages 0-5)
+                for i in range(6):
+                    try:
+                        # Construct URL for forecast page using region_path
+                        region_path_from_data = parsed_data.get(
+                            "region_path", ""
+                        ).strip("/")
+                        if region_path_from_data:
+                            forecast_url = urljoin(
+                                BASE_URL,
+                                f"/{region_path_from_data}/wetter/schneevorhersage/{i}/",
+                            )
+                        else:
+                            _LOGGER.warning(
+                                "Region path not found for %s, cannot fetch forecast images.",
+                                area_path,
+                            )
+                            continue
+                        _LOGGER.debug("Fetching forecast images from: %s", forecast_url)
+                        async with session.get(
+                            forecast_url, allow_redirects=True
+                        ) as response:
+                            if response.status == 200:
+                                forecast_html = await response.text()
+                                image_data = parse_snow_forecast_images(
+                                    forecast_html, i
+                                )
+
+                                # Flatten data into parsed_data
+                                if "daily_forecast_url" in image_data:
+                                    parsed_data[f"forecast_image_day_{i}_url"] = (
+                                        image_data["daily_forecast_url"]
+                                    )
+                                    parsed_data[f"forecast_image_day_{i}_caption"] = (
+                                        image_data.get("daily_caption", "")
+                                    )
+
+                                if "summary_url" in image_data:
+                                    hours = (i + 1) * 24
+                                    parsed_data[f"summary_image_{hours}h_url"] = (
+                                        image_data["summary_url"]
+                                    )
+                                    parsed_data[f"summary_image_{hours}h_caption"] = (
+                                        image_data.get("summary_caption", "")
+                                    )
+                            else:
+                                _LOGGER.warning(
+                                    "Could not fetch forecast page %d: %s",
+                                    i,
+                                    response.status,
+                                )
+                    except Exception as err:
+                        _LOGGER.warning("Error fetching forecast page %d: %s", i, err)
+
                 _LOGGER.debug("Parsed resort data for %s: %s", area_path, parsed_data)
                 return {area_path: parsed_data}
             except Exception as err:
