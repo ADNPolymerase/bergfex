@@ -2,7 +2,7 @@ DOMAIN = "bergfex"
 CONF_SKI_AREA = "ski_area"
 CONF_COUNTRY = "country"
 COORDINATORS = "coordinators"
-BASE_URL = "https://www.bergfex.at"
+BASE_URL = "https://www.bergfex.fr"
 
 
 # Dictionary of countries and their corresponding snow report URL paths
